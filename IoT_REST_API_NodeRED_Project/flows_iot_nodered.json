@@ -1,0 +1,449 @@
+[
+    {
+        "id": "tab_iot_lengkap",
+        "type": "tab",
+        "label": "IoT REST API + WebSocket + SQLite",
+        "disabled": false,
+        "info": ""
+    },
+    {
+        "id": "mqtt_broker_cfg",
+        "type": "mqtt-broker",
+        "name": "Local Mosquitto",
+        "broker": "localhost",
+        "port": "1883",
+        "clientid": "node-red-backend",
+        "autoConnect": true,
+        "usetls": false,
+        "protocolVersion": "4",
+        "keepalive": "60",
+        "cleansession": true
+    },
+    {
+        "id": "sqlite_db_cfg",
+        "type": "sqlitedb",
+        "db": "iot_monitoring.db",
+        "mode": "RWC"
+    },
+    {
+        "id": "ws_server_cfg",
+        "type": "websocket-listener",
+        "path": "/ws/iot",
+        "wholemsg": "false"
+    },
+    {
+        "id": "inject_init_db",
+        "type": "inject",
+        "z": "tab_iot_lengkap",
+        "name": "Init DB & Threshold",
+        "props": [
+            {
+                "p": "payload"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": true,
+        "onceDelay": 0.1,
+        "topic": "",
+        "payload": "",
+        "payloadType": "date",
+        "x": 150,
+        "y": 60,
+        "wires": [
+            [
+                "fn_init_db"
+            ]
+        ]
+    },
+    {
+        "id": "fn_init_db",
+        "type": "function",
+        "z": "tab_iot_lengkap",
+        "name": "Setup Tabel SQLite & Default Threshold",
+        "func": "if (flow.get('tempThreshold') === undefined) {\n    flow.set('tempThreshold', 30.0);\n}\nmsg.topic = \"CREATE TABLE IF NOT EXISTS sensor_history (id INTEGER PRIMARY KEY AUTOINCREMENT, suhu REAL, kelembaban REAL, timestamp TEXT, received TEXT);\";\nreturn msg;",
+        "outputs": 1,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 420,
+        "y": 60,
+        "wires": [
+            [
+                "sqlite_exec_init"
+            ]
+        ]
+    },
+    {
+        "id": "sqlite_exec_init",
+        "type": "sqlite",
+        "z": "tab_iot_lengkap",
+        "mydb": "sqlite_db_cfg",
+        "sqlquery": "msg.topic",
+        "sql": "",
+        "name": "SQLite Init",
+        "x": 670,
+        "y": 60,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "mqtt_in_sensor",
+        "type": "mqtt in",
+        "z": "tab_iot_lengkap",
+        "name": "Subscribe Sensor",
+        "topic": "iot/sensor",
+        "qos": "0",
+        "datatype": "json",
+        "broker": "mqtt_broker_cfg",
+        "nl": false,
+        "rap": true,
+        "rh": 0,
+        "inputs": 0,
+        "x": 140,
+        "y": 160,
+        "wires": [
+            [
+                "fn_process_sensor"
+            ]
+        ]
+    },
+    {
+        "id": "fn_process_sensor",
+        "type": "function",
+        "z": "tab_iot_lengkap",
+        "name": "Proses Sensor, Cek Threshold & Siapkan SQL",
+        "func": "var data = msg.payload;\ndata.received = new Date().toISOString();\nflow.set('lastSensor', data);\n\nvar threshold = flow.get('tempThreshold') || 30.0;\nvar isAlert = data.suhu > threshold;\n\nvar sqlMsg = {\n    topic: `INSERT INTO sensor_history (suhu, kelembaban, timestamp, received) VALUES (${data.suhu}, ${data.kelembaban}, '${data.timestamp}', '${data.received}');`\n};\n\nvar wsMsg = {\n    payload: JSON.stringify({\n        type: 'sensor_update',\n        data: data,\n        threshold: threshold,\n        alert: isAlert,\n        alert_message: isAlert ? `PERINGATAN! Suhu (${data.suhu}°C) melebihi batas (${threshold}°C)!` : null\n    })\n};\n\nvar alertMqttMsg = null;\nif (isAlert) {\n    alertMqttMsg = {\n        topic: 'iot/alert',\n        payload: JSON.stringify({\n            status: 'WARNING',\n            message: `Suhu tinggi terdeteksi: ${data.suhu}°C (Batas: ${threshold}°C)`,\n            timestamp: data.received\n        })\n    };\n}\n\nreturn [sqlMsg, wsMsg, alertMqttMsg];",
+        "outputs": 3,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 410,
+        "y": 160,
+        "wires": [
+            [
+                "sqlite_insert"
+            ],
+            [
+                "ws_out_broadcast"
+            ],
+            [
+                "mqtt_out_alert",
+                "debug_alert"
+            ]
+        ]
+    },
+    {
+        "id": "sqlite_insert",
+        "type": "sqlite",
+        "z": "tab_iot_lengkap",
+        "mydb": "sqlite_db_cfg",
+        "sqlquery": "msg.topic",
+        "sql": "",
+        "name": "Simpan ke SQLite",
+        "x": 710,
+        "y": 120,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "ws_out_broadcast",
+        "type": "websocket out",
+        "z": "tab_iot_lengkap",
+        "name": "WS Broadcast",
+        "server": "ws_server_cfg",
+        "client": "",
+        "x": 700,
+        "y": 160,
+        "wires": []
+    },
+    {
+        "id": "mqtt_out_alert",
+        "type": "mqtt out",
+        "z": "tab_iot_lengkap",
+        "name": "Publish Alert MQTT",
+        "topic": "",
+        "qos": "0",
+        "retain": "false",
+        "respTopic": "",
+        "contentType": "",
+        "userProps": "",
+        "correl": "",
+        "expiry": "",
+        "broker": "mqtt_broker_cfg",
+        "x": 710,
+        "y": 200,
+        "wires": []
+    },
+    {
+        "id": "debug_alert",
+        "type": "debug",
+        "z": "tab_iot_lengkap",
+        "name": "Log Alert",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "payload",
+        "targetType": "msg",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 680,
+        "y": 240,
+        "wires": []
+    },
+    {
+        "id": "http_get_suhu",
+        "type": "http in",
+        "z": "tab_iot_lengkap",
+        "name": "GET /api/suhu",
+        "url": "/api/suhu",
+        "method": "get",
+        "upload": false,
+        "swaggerDoc": "",
+        "x": 130,
+        "y": 320,
+        "wires": [
+            [
+                "fn_auth_suhu"
+            ]
+        ]
+    },
+    {
+        "id": "fn_auth_suhu",
+        "type": "function",
+        "z": "tab_iot_lengkap",
+        "name": "Auth + Response Suhu",
+        "func": "const VALID_KEY = 'RAHASIABANGAT123';\nconst apiKey = msg.req.headers['x-api-key'];\nmsg.headers = {'Access-Control-Allow-Origin': '*'};\n\nif (apiKey !== VALID_KEY) {\n    msg.statusCode = 401;\n    msg.payload = { status: 'error', message: 'Unauthorized: X-API-Key tidak valid' };\n    return msg;\n}\n\nvar data = flow.get('lastSensor') || { suhu: null, kelembaban: null, timestamp: null };\nvar threshold = flow.get('tempThreshold') || 30.0;\nmsg.statusCode = 200;\nmsg.payload = {\n    status: 'success',\n    data: data,\n    threshold: threshold,\n    server_time: new Date().toISOString()\n};\nreturn msg;",
+        "outputs": 1,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 380,
+        "y": 320,
+        "wires": [
+            [
+                "http_resp_general"
+            ]
+        ]
+    },
+    {
+        "id": "http_get_history",
+        "type": "http in",
+        "z": "tab_iot_lengkap",
+        "name": "GET /api/history",
+        "url": "/api/history",
+        "method": "get",
+        "upload": false,
+        "swaggerDoc": "",
+        "x": 140,
+        "y": 380,
+        "wires": [
+            [
+                "fn_auth_history"
+            ]
+        ]
+    },
+    {
+        "id": "fn_auth_history",
+        "type": "function",
+        "z": "tab_iot_lengkap",
+        "name": "Auth & Query SQLite",
+        "func": "const VALID_KEY = 'RAHASIABANGAT123';\nconst apiKey = msg.req.headers['x-api-key'];\nmsg.headers = {'Access-Control-Allow-Origin': '*'};\n\nif (apiKey !== VALID_KEY) {\n    msg.statusCode = 401;\n    msg.payload = { status: 'error', message: 'Unauthorized: X-API-Key tidak valid' };\n    return [null, msg];\n}\n\nmsg.topic = \"SELECT suhu, kelembaban, timestamp, received FROM sensor_history ORDER BY id DESC LIMIT 50;\";\nreturn [msg, null];",
+        "outputs": 2,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 360,
+        "y": 380,
+        "wires": [
+            [
+                "sqlite_select_history"
+            ],
+            [
+                "http_resp_general"
+            ]
+        ]
+    },
+    {
+        "id": "sqlite_select_history",
+        "type": "sqlite",
+        "z": "tab_iot_lengkap",
+        "mydb": "sqlite_db_cfg",
+        "sqlquery": "msg.topic",
+        "sql": "",
+        "name": "Ambil 50 History",
+        "x": 580,
+        "y": 360,
+        "wires": [
+            [
+                "fn_format_history"
+            ]
+        ]
+    },
+    {
+        "id": "fn_format_history",
+        "type": "function",
+        "z": "tab_iot_lengkap",
+        "name": "Format History JSON",
+        "func": "var rows = (msg.payload || []).reverse();\nmsg.statusCode = 200;\nmsg.headers = {'Access-Control-Allow-Origin': '*'};\nmsg.payload = {\n    status: 'success',\n    count: rows.length,\n    data: rows\n};\nreturn msg;",
+        "outputs": 1,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 790,
+        "y": 360,
+        "wires": [
+            [
+                "http_resp_general"
+            ]
+        ]
+    },
+    {
+        "id": "http_post_kontrol",
+        "type": "http in",
+        "z": "tab_iot_lengkap",
+        "name": "POST /api/kontrol",
+        "url": "/api/kontrol",
+        "method": "post",
+        "upload": false,
+        "swaggerDoc": "",
+        "x": 140,
+        "y": 460,
+        "wires": [
+            [
+                "fn_proc_kontrol"
+            ]
+        ]
+    },
+    {
+        "id": "fn_proc_kontrol",
+        "type": "function",
+        "z": "tab_iot_lengkap",
+        "name": "Auth, Validasi & Publish Kontrol",
+        "func": "const VALID_KEY = 'RAHASIABANGAT123';\nconst apiKey = msg.req.headers['x-api-key'];\nmsg.headers = {'Access-Control-Allow-Origin': '*'};\n\nif (apiKey !== VALID_KEY) {\n    msg.statusCode = 401;\n    msg.payload = { status: 'error', message: 'Unauthorized: X-API-Key tidak valid' };\n    return [msg, null];\n}\n\nvar body = msg.payload;\nif (!body.device || !body.action) {\n    msg.statusCode = 400;\n    msg.payload = { status: 'error', message: 'device dan action wajib diisi' };\n    return [msg, null];\n}\n\nvar mqttMsg = { payload: JSON.stringify(body), topic: 'iot/kontrol' };\nmsg.statusCode = 200;\nmsg.payload = {\n    status: 'success',\n    message: 'Perintah terkirim',\n    sent: body\n};\nreturn [msg, mqttMsg];",
+        "outputs": 2,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 390,
+        "y": 460,
+        "wires": [
+            [
+                "http_resp_general"
+            ],
+            [
+                "mqtt_out_kontrol"
+            ]
+        ]
+    },
+    {
+        "id": "mqtt_out_kontrol",
+        "type": "mqtt out",
+        "z": "tab_iot_lengkap",
+        "name": "Publish Kontrol",
+        "topic": "",
+        "qos": "0",
+        "retain": "false",
+        "respTopic": "",
+        "contentType": "",
+        "userProps": "",
+        "correl": "",
+        "expiry": "",
+        "broker": "mqtt_broker_cfg",
+        "x": 680,
+        "y": 480,
+        "wires": []
+    },
+    {
+        "id": "http_put_threshold",
+        "type": "http in",
+        "z": "tab_iot_lengkap",
+        "name": "PUT /api/threshold",
+        "url": "/api/threshold",
+        "method": "put",
+        "upload": false,
+        "swaggerDoc": "",
+        "x": 150,
+        "y": 540,
+        "wires": [
+            [
+                "fn_put_threshold"
+            ]
+        ]
+    },
+    {
+        "id": "fn_put_threshold",
+        "type": "function",
+        "z": "tab_iot_lengkap",
+        "name": "Auth & Set Threshold Suhu",
+        "func": "const VALID_KEY = 'RAHASIABANGAT123';\nconst apiKey = msg.req.headers['x-api-key'];\nmsg.headers = {'Access-Control-Allow-Origin': '*'};\n\nif (apiKey !== VALID_KEY) {\n    msg.statusCode = 401;\n    msg.payload = { status: 'error', message: 'Unauthorized: X-API-Key tidak valid' };\n    return msg;\n}\n\nvar nilai = parseFloat(msg.payload.threshold);\nif (isNaN(nilai)) {\n    msg.statusCode = 400;\n    msg.payload = { status: 'error', message: 'Field threshold harus berupa angka' };\n    return msg;\n}\n\nflow.set('tempThreshold', nilai);\nmsg.statusCode = 200;\nmsg.payload = {\n    status: 'success',\n    message: 'Batas suhu berhasil diperbarui',\n    threshold: nilai\n};\nreturn msg;",
+        "outputs": 1,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 390,
+        "y": 540,
+        "wires": [
+            [
+                "http_resp_general"
+            ]
+        ]
+    },
+    {
+        "id": "http_options_cors",
+        "type": "http in",
+        "z": "tab_iot_lengkap",
+        "name": "OPTIONS CORS",
+        "url": "/api/*",
+        "method": "options",
+        "upload": false,
+        "swaggerDoc": "",
+        "x": 140,
+        "y": 600,
+        "wires": [
+            [
+                "fn_cors_headers"
+            ]
+        ]
+    },
+    {
+        "id": "fn_cors_headers",
+        "type": "function",
+        "z": "tab_iot_lengkap",
+        "name": "CORS Headers (GET, POST, PUT, X-API-Key)",
+        "func": "msg.statusCode = 204;\nmsg.payload = '';\nmsg.headers = {\n    'Access-Control-Allow-Origin': '*',\n    'Access-Control-Allow-Methods': 'GET, POST, PUT, OPTIONS',\n    'Access-Control-Allow-Headers': 'Content-Type, X-API-Key'\n};\nreturn msg;",
+        "outputs": 1,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 430,
+        "y": 600,
+        "wires": [
+            [
+                "http_resp_general"
+            ]
+        ]
+    },
+    {
+        "id": "http_resp_general",
+        "type": "http response",
+        "z": "tab_iot_lengkap",
+        "name": "HTTP Response",
+        "statusCode": "",
+        "headers": {},
+        "x": 960,
+        "y": 460,
+        "wires": []
+    }
+]
